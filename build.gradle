@@ -1,0 +1,104 @@
+plugins {
+    id 'java'
+    id 'application'
+    id 'com.github.johnrengelman.shadow' version '8.1.1'
+    id 'org.springframework.boot' version '3.2.0'
+    id 'io.spring.dependency-management' version '1.1.4'
+}
+
+group = 'com.freshworks'
+version = '1.0.0'
+sourceCompatibility = '17'
+
+repositories {
+    mavenCentral()
+}
+
+dependencyManagement {
+    imports {
+        mavenBom 'org.springframework.boot:spring-boot-dependencies:3.2.0'
+    }
+}
+
+dependencies {
+    // Spring Boot
+    implementation 'org.springframework.boot:spring-boot-starter-web'
+    implementation 'org.springframework.boot:spring-boot-starter-validation'
+    
+    // HTML parsing
+    implementation 'org.jsoup:jsoup:1.17.2'
+    
+    // Playwright for JS-rendered pages
+    implementation 'com.microsoft.playwright:playwright:1.41.0'
+    
+    // JSON processing
+    implementation 'com.google.code.gson:gson:2.10.1'
+    
+    // Command-line argument parsing (still needed for CLI)
+    implementation 'info.picocli:picocli:4.7.5'
+    annotationProcessor 'info.picocli:picocli-codegen:4.7.5'
+    
+    // Testing
+    testImplementation 'org.springframework.boot:spring-boot-starter-test'
+    testImplementation 'org.junit.jupiter:junit-jupiter:5.10.1'
+    testImplementation 'org.mockito:mockito-core:5.8.0'
+    testImplementation 'org.mockito:mockito-junit-jupiter:5.8.0'
+}
+
+application {
+    mainClass = 'com.freshworks.scraper.Application'
+}
+
+tasks.named('shadowJar').configure {
+    archiveBaseName.set('api-docs-scraper')
+    archiveClassifier.set('')
+    archiveVersion.set('1.0.0')
+    from('build/classes') {
+        into ''
+    }
+    configurations = [project.configurations.runtimeClasspath]
+    mergeServiceFiles()
+}
+
+test {
+    useJUnitPlatform()
+    jvmArgs = [
+        '--add-opens', 'java.base/java.lang=ALL-UNNAMED',
+        '--add-opens', 'java.base/java.time=ALL-UNNAMED'
+    ]
+}
+
+jar {
+    manifest {
+        attributes(
+            'Main-Class': 'com.freshworks.scraper.cli.ScraperCLI'
+        )
+    }
+}
+
+shadowJar {
+    archiveBaseName.set('api-docs-scraper')
+    archiveClassifier.set('')
+    archiveVersion.set('1.0.0')
+}
+
+// Fix task dependencies  
+tasks.named('distTar') {
+    dependsOn shadowJar
+}
+tasks.named('distZip') {
+    dependsOn shadowJar
+}
+tasks.named('startScripts') {
+    dependsOn shadowJar
+}
+
+// Disable Spring Boot's executable jar since we're using shadow plugin
+tasks.named('bootJar').configure {
+    enabled = false
+}
+
+tasks.named('jar').configure {
+    enabled = true
+}
+

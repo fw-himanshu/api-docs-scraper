@@ -1,0 +1,46 @@
+# Example configuration file for API Docs Scraper
+# This file demonstrates how to configure custom CSS selectors for different documentation sites
+
+# URLs to scrape
+urls:
+  - "https://developer.calendly.com/api-docs/4b402d5ab3edd-calendly-developer"
+  - "https://api.example.com/docs"
+
+# Output file path
+output: "scraped-endpoints.json"
+
+# Force Playwright rendering (for JS-heavy sites)
+usePlaywright: false
+
+# Rate limiting (milliseconds between requests)
+rateLimitMs: 1000
+
+# Custom CSS selectors for different sites (optional)
+selectors:
+  # For Stoplight-based documentation
+  stoplight:
+    endpointHeading: "h2.HttpOperation-name"
+    methodBadge: "span.HttpMethod"
+    pathText: "span.HttpPath"
+    description: "div.MarkdownViewer"
+    parametersTable: "table.ParametersTable"
+    codeBlock: "pre code"
+  
+  # For custom documentation
+  custom:
+    endpointHeading: "h1, h2, h3"
+    parametersTable: "table.params"
+    exampleCode: "div.example pre"
+
+# Logging level (DEBUG, INFO, WARN, ERROR)
+logLevel: "INFO"
+
+# User agent string
+userAgent: "API-Docs-Scraper/1.0"
+
+# Timeout settings (seconds)
+timeout:
+  connection: 30
+  read: 30
+  playwright: 5
+

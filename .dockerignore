@@ -1,0 +1,28 @@
+# VCS
+.git
+.gitignore
+
+# IDEs
+.idea
+.vscode
+*.iml
+
+# Build outputs
+/build
+/out
+/target
+.gradle
+
+# OS files
+.DS_Store
+
+# Logs and temp
+*.log
+*.tmp
+*.swp
+
+# Local scripts and samples
+calendly-*
+*debug*.html
+*demo*.html
+*test*.json

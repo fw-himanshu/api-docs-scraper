@@ -1,0 +1,40 @@
+spring:
+  application:
+    name: api-docs-scraper
+  
+  jackson:
+    default-property-inclusion: non_null
+    serialization:
+      write-dates-as-timestamps: false
+
+server:
+  port: 8080
+  
+# Application settings
+app:
+  scraper:
+    max-concurrent-scrapes: 3
+    timeout-seconds: 300
+
+# LLM API Configuration
+llm:
+  api:
+    url: https://cloudverse.freshworkscorp.com/api/v2/chat
+    model: anthropic-claude-4-5-sonnet
+    token: ${LLM_API_TOKEN:YOUR_API_TOKEN_HERE}
+    temperature: 0
+    top_p: 1
+    timeout-seconds: 120
+
+logging:
+  level:
+    com.freshworks.scraper: INFO
+    org.springframework.web: INFO
+  pattern:
+    console: "%d{yyyy-MM-dd HH:mm:ss} - %msg%n"
+    file: "%d{yyyy-MM-dd HH:mm:ss} [%thread] %-5level %logger{36} - %msg%n"
+
+# Note: LLM API token should be provided via environment variable LLM_API_TOKEN
+# or set in application-local.yml (not committed to git)
+
+
