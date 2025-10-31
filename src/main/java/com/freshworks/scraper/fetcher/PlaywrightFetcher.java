@@ -23,10 +23,23 @@ public class PlaywrightFetcher implements PageFetcher {
     public PlaywrightFetcher(int waitTimeMs) {
         this.waitTimeMs = waitTimeMs;
         logger.info("Initializing Playwright browser...");
-        this.playwright = Playwright.create();
-        this.browser = playwright.chromium().launch(new BrowserType.LaunchOptions()
-                .setHeadless(true));
-        logger.info("Playwright browser initialized");
+        
+        // Set driver path if provided via environment variable
+        String driverPath = System.getenv("PLAYWRIGHT_DRIVER_PATH");
+        if (driverPath != null && !driverPath.isEmpty()) {
+            logger.info("Using Playwright driver from: {}", driverPath);
+            System.setProperty("PLAYWRIGHT_DRIVER_PATH", driverPath);
+        }
+        
+        try {
+            this.playwright = Playwright.create();
+            this.browser = playwright.chromium().launch(new BrowserType.LaunchOptions()
+                    .setHeadless(true));
+            logger.info("Playwright browser initialized successfully");
+        } catch (Exception e) {
+            logger.error("Failed to initialize Playwright", e);
+            throw new RuntimeException("Failed to create Playwright browser: " + e.getMessage(), e);
+        }
     }
 
     @Override

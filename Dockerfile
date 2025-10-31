@@ -32,11 +32,27 @@ WORKDIR /app
 # bootJar creates: api-docs-scraper-1.0.0.jar (Spring Boot executable jar)
 COPY --from=builder /app/build/libs/api-docs-scraper-1.0.0.jar /app/app.jar
 
-# Ensure /tmp is writable for Playwright driver extraction
+# Pre-extract Playwright driver to avoid JAR extraction issues at runtime
+# Create a directory for Playwright driver and extract it from the JAR
+RUN mkdir -p /app/.playwright/driver && \
+    cd /tmp && \
+    # Extract Playwright JAR from Spring Boot JAR
+    unzip -q -o /app/app.jar "BOOT-INF/lib/playwright-*.jar" -d /tmp/playwright-extract || true && \
+    # Find the Playwright JAR
+    PLAYWRIGHT_JAR=$(find /tmp/playwright-extract -name "playwright-*.jar" | head -1) && \
+    if [ -n "$PLAYWRIGHT_JAR" ] && [ -f "$PLAYWRIGHT_JAR" ]; then \
+        # Extract driver from Playwright JAR
+        unzip -q -o "$PLAYWRIGHT_JAR" "driver/*" -d /app/.playwright/ || true; \
+    fi && \
+    # Cleanup
+    rm -rf /tmp/playwright-extract && \
+    chmod -R 755 /app/.playwright
+
+# Ensure /tmp is writable
 RUN mkdir -p /tmp && chmod 1777 /tmp
 
-# Create a writable directory for Playwright
-RUN mkdir -p /app/.playwright && chmod 755 /app/.playwright
+# Set environment variable to point to extracted driver
+ENV PLAYWRIGHT_DRIVER_PATH=/app/.playwright/driver
 
 EXPOSE 8080
 
