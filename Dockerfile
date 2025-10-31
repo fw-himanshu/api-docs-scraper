@@ -13,8 +13,8 @@ RUN gradle --no-daemon dependencies || true
 # Now copy the source
 COPY . /app
 
-# Build the fat jar (tests skipped for faster builds)
-RUN gradle --no-daemon clean shadowJar -x test
+# Build the Spring Boot executable jar (tests skipped for faster builds)
+RUN gradle --no-daemon clean bootJar -x test
 
 
 ## Runtime stage with Playwright support
@@ -28,7 +28,8 @@ ENV PLAYWRIGHT_BROWSERS_PATH=0
 
 WORKDIR /app
 
-# Copy built jar from the builder stage
+# Copy built Spring Boot executable jar from the builder stage
+# bootJar creates: api-docs-scraper-1.0.0.jar (Spring Boot executable jar)
 COPY --from=builder /app/build/libs/api-docs-scraper-1.0.0.jar /app/app.jar
 
 EXPOSE 8080
@@ -37,4 +38,4 @@ EXPOSE 8080
 HEALTHCHECK --interval=30s --timeout=5s --start-period=30s --retries=5 \
   CMD curl -f http://localhost:8080/api/v1/scraper/health || exit 1
 
-ENTRYPOINT ["/bin/sh", "-c", "exec java $JAVA_OPTS -jar /app/app.jar --server.port=${SERVER_PORT}"]
+ENTRYPOINT ["/bin/sh", "-c", "exec java $JAVA_OPTS -jar /app/app.jar"]

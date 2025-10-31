@@ -68,37 +68,40 @@ test {
     ]
 }
 
+// Regular jar task (used for dependencies, not executable)
 jar {
-    manifest {
-        attributes(
-            'Main-Class': 'com.freshworks.scraper.cli.ScraperCLI'
-        )
-    }
+    enabled = true
+    // Don't set Main-Class here - let bootJar handle it for executable jars
+    // CLI mode can use shadowJar if needed separately
 }
 
-shadowJar {
+// Use Spring Boot's bootJar for proper web application support
+// This creates an executable jar with Spring Boot's launcher
+bootJar {
     archiveBaseName.set('api-docs-scraper')
     archiveClassifier.set('')
     archiveVersion.set('1.0.0')
+    mainClass = 'com.freshworks.scraper.Application'
 }
 
-// Fix task dependencies  
+// Keep shadowJar for CLI mode if needed, but use bootJar as primary
+shadowJar {
+    archiveBaseName.set('api-docs-scraper')
+    archiveClassifier.set('shadow')
+    archiveVersion.set('1.0.0')
+    // Only enable shadowJar if needed for CLI mode
+    // For K8s deployment, we use bootJar
+}
+
+// Fix task dependencies to use bootJar instead
 tasks.named('distTar') {
-    dependsOn shadowJar
+    dependsOn bootJar
 }
 tasks.named('distZip') {
-    dependsOn shadowJar
+    dependsOn bootJar
 }
 tasks.named('startScripts') {
-    dependsOn shadowJar
+    dependsOn bootJar
 }
 
-// Disable Spring Boot's executable jar since we're using shadow plugin
-tasks.named('bootJar').configure {
-    enabled = false
-}
-
-tasks.named('jar').configure {
-    enabled = true
-}
 
