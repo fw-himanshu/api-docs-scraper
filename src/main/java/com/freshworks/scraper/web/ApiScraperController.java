@@ -1,11 +1,12 @@
 package com.freshworks.scraper.web;
 
-import com.freshworks.scraper.ApiDocsScraper;
-import com.freshworks.scraper.ScraperException;
+import com.freshworks.scraper.llm.LLMClient;
+import com.freshworks.scraper.llm.LLMException;
 import com.freshworks.scraper.config.AppConfig;
-import com.freshworks.scraper.exporter.JsonExporter;
-import com.freshworks.scraper.model.Endpoint;
-import com.freshworks.scraper.model.ScrapedResult;
+import com.freshworks.scraper.model.ScrapeJob;
+import com.freshworks.scraper.service.JobService;
+
+import java.util.Map;
 import jakarta.validation.Valid;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -15,12 +16,8 @@ import org.springframework.http.ResponseEntity;
 import org.springframework.validation.annotation.Validated;
 import org.springframework.web.bind.annotation.*;
 
-import java.io.IOException;
-import java.nio.file.Files;
-import java.nio.file.Path;
+import java.time.Duration;
 import java.time.LocalDateTime;
-import java.util.List;
-import java.util.UUID;
 
 /**
  * REST API controller for the API documentation scraper.
@@ -33,92 +30,136 @@ public class ApiScraperController {
     private static final Logger logger = LoggerFactory.getLogger(ApiScraperController.class);
     
     private final AppConfig appConfig;
+    private final JobService jobService;
+    private final LLMClient llmClient;
     
-    public ApiScraperController(AppConfig appConfig) {
+    public ApiScraperController(AppConfig appConfig, JobService jobService) {
         this.appConfig = appConfig;
+        this.jobService = jobService;
+        // Initialize LLM client for humorous messages (use token from config)
+        this.llmClient = new LLMClient(appConfig.getLLMApiToken());
     }
     
     /**
      * POST /api/v1/scraper/scrape
      * 
-     * Scrapes API documentation from the provided URL(s) and returns extracted endpoints.
+     * Queues a scraping job and returns immediately with a job ID.
+     * The actual scraping happens asynchronously.
      * 
      * @param request The scrape request containing URL and options
-     * @return ScrapeResponse with extracted endpoints
+     * @return JobResponse with job ID
      */
     @PostMapping(value = "/scrape", produces = MediaType.APPLICATION_JSON_VALUE)
-    public ResponseEntity<ScrapeResponse> scrape(@Valid @RequestBody ScrapeRequest request) {
-        logger.info("Scrape API request received for URL: {}", request.getUrl());
+    public ResponseEntity<JobResponse> scrape(@Valid @RequestBody ScrapeRequest request) {
+        logger.info("Scrape job request received for URL: {}", request.getUrl());
         
         try {
             // Determine LLM token (from request, environment, or config)
             String llmToken = determineLlmToken(request.getLlmToken());
             
-            // Create scraper instance with options
-            ApiDocsScraper scraper = new ApiDocsScraper(request.isUsePlaywright(), llmToken);
+            // Create and queue the job
+            ScrapeJob job = jobService.createJob(
+                    request.getUrl(),
+                    request.isUsePlaywright(),
+                    llmToken,
+                    request.getAdditionalUrls()
+            );
             
-            // Perform the scrape
-            ScrapedResult result;
-            if (request.getAdditionalUrls() != null && !request.getAdditionalUrls().isEmpty()) {
-                // Multiple URLs
-                List<String> allUrls = java.util.stream.Stream.concat(
-                        java.util.stream.Stream.of(request.getUrl()),
-                        request.getAdditionalUrls().stream()
-                ).toList();
-                result = scraper.scrapeMultiple(allUrls);
-            } else {
-                // Single URL
-                result = scraper.scrape(request.getUrl());
-            }
+            logger.info("Scrape job {} queued for URL: {}", job.getJobId(), request.getUrl());
             
-            // Get results
-            List<Endpoint> endpoints = result.getEndpoints();
+            return ResponseEntity.status(HttpStatus.ACCEPTED)
+                    .body(JobResponse.queued(
+                            job.getJobId(),
+                            "Scraping job queued successfully. Use /scrape/" + job.getJobId() + " to check status."
+                    ));
             
-            // Generate OpenAPI 3.0 specification using LLM
-            String openApiSpec = null;
-            try {
-                logger.info("Generating OpenAPI 3.0 specification using LLM...");
-                openApiSpec = scraper.generateOpenAPI(result, extractBaseUrl(request.getUrl()));
-                logger.info("OpenAPI specification generated successfully");
-            } catch (ScraperException e) {
-                logger.error("Failed to generate OpenAPI specification, returning raw endpoints", e);
-                // Continue with raw endpoint response
-            }
-            
-            // Prepare response
-            ScrapeResponse response;
-            if (openApiSpec != null) {
-                response = ScrapeResponse.successWithOpenAPI(
-                        "Successfully scraped " + endpoints.size() + " endpoints and generated OpenAPI 3.0 spec",
-                        endpoints,
-                        openApiSpec
-                );
-            } else {
-                // Fallback to JSON if OpenAPI generation fails
-                String jsonOutput = generateJsonOutput(result);
-                response = ScrapeResponse.success(
-                        "Successfully scraped " + endpoints.size() + " endpoints (OpenAPI generation failed)",
-                        endpoints,
-                        jsonOutput
-                );
-            }
-            response.setSourceUrl(request.getUrl());
-            
-            logger.info("Scrape API request completed successfully. Extracted {} endpoints", 
-                    endpoints.size());
-            
-            return ResponseEntity.ok(response);
-            
-        } catch (ScraperException e) {
-            logger.error("Scraping failed", e);
-            return ResponseEntity.status(HttpStatus.INTERNAL_SERVER_ERROR)
-                    .body(ScrapeResponse.failure("Scraping failed: " + e.getMessage(), 
-                            e.getCause() != null ? e.getCause().getMessage() : e.getMessage()));
         } catch (Exception e) {
-            logger.error("Unexpected error during scraping", e);
+            logger.error("Failed to queue scraping job", e);
             return ResponseEntity.status(HttpStatus.INTERNAL_SERVER_ERROR)
-                    .body(ScrapeResponse.failure("Unexpected error: " + e.getMessage(), 
-                            e.getMessage()));
+                    .body(JobResponse.failed(null, "Failed to queue job: " + e.getMessage()));
+        }
+    }
+    
+    /**
+     * GET /api/v1/scraper/scrape/{jobId}
+     * 
+     * Retrieves the status and results of a scraping job.
+     * If the job is still processing, returns a humorous message generated by LLM.
+     * 
+     * @param jobId The job ID returned from the /scrape endpoint
+     * @return JobResponse with status and results (if completed) or humorous message (if pending)
+     */
+    @GetMapping(value = "/scrape/{jobId}", produces = MediaType.APPLICATION_JSON_VALUE)
+    public ResponseEntity<JobResponse> getJobStatus(@PathVariable String jobId) {
+        logger.info("Job status request for job ID: {}", jobId);
+        
+        ScrapeJob job = jobService.getJob(jobId);
+        
+        if (job == null) {
+            logger.warn("Job {} not found", jobId);
+            return ResponseEntity.status(HttpStatus.NOT_FOUND)
+                    .body(JobResponse.notFound(jobId));
+        }
+        
+        // If job is completed or failed, return the results
+        if (job.getStatus() == ScrapeJob.Status.COMPLETED) {
+            logger.info("Job {} completed, returning results", jobId);
+            return ResponseEntity.ok(JobResponse.completed(job));
+        }
+        
+        if (job.getStatus() == ScrapeJob.Status.FAILED) {
+            logger.warn("Job {} failed", jobId);
+            return ResponseEntity.status(HttpStatus.INTERNAL_SERVER_ERROR)
+                    .body(JobResponse.failed(jobId, job.getErrorMessage()));
+        }
+        
+        // Job is still processing (QUEUED or PROCESSING)
+        // Generate a humorous message using LLM
+        logger.info("Job {} is still processing, generating humorous message", jobId);
+        String humorousMessage = generateHumorousMessage(job);
+        
+        return ResponseEntity.status(HttpStatus.ACCEPTED)
+                .body(JobResponse.pending(jobId, humorousMessage));
+    }
+    
+    /**
+     * Generates a humorous message about the job status using LLM.
+     */
+    private String generateHumorousMessage(ScrapeJob job) {
+        try {
+            long elapsedSeconds = Duration.between(job.getCreatedAt(), LocalDateTime.now()).getSeconds();
+            String progressMessage = job.getProgressMessage() != null ? job.getProgressMessage() : "processing";
+            
+            String systemPrompt = "You are a witty, friendly assistant. Generate a short, humorous message " +
+                    "(2-3 sentences max) about waiting for an API documentation scraping job to complete. " +
+                    "Make it entertaining but not too silly. Include that the job is still working.";
+            
+            String userPrompt = String.format(
+                    "An API documentation scraping job has been running for %d seconds. " +
+                    "Current status: %s. " +
+                    "The user is checking on the job. " +
+                    "Generate a humorous message to reassure them that the job is still working and will be ready soon. " +
+                    "Be creative and fun, but keep it professional.",
+                    elapsedSeconds,
+                    progressMessage
+            );
+            
+            String llmResponse = llmClient.call(systemPrompt, userPrompt);
+            // Clean up any markdown formatting from LLM response
+            return llmResponse.trim()
+                    .replaceAll("^\"|\"$", "") // Remove quotes
+                    .replaceAll("^```[\\w]*\n?|\n?```$", "") // Remove code blocks
+                    .trim();
+                    
+        } catch (LLMException e) {
+            logger.warn("Failed to generate humorous message, using fallback", e);
+            // Fallback message if LLM call fails
+            long elapsedSeconds = Duration.between(job.getCreatedAt(), LocalDateTime.now()).getSeconds();
+            return String.format(
+                    "Your scraping job is still hard at work! 🚀 It's been %d seconds, and our API scraper is " +
+                    "diligently collecting all those endpoints. Great things take time - check back in a moment!",
+                    elapsedSeconds
+            );
         }
     }
     
@@ -145,14 +186,25 @@ public class ApiScraperController {
      * Returns current configuration (without sensitive data).
      */
     @GetMapping("/config")
-    public ResponseEntity<java.util.Map<String, Object>> config() {
-        java.util.Map<String, Object> config = new java.util.HashMap<>();
+    public ResponseEntity<Map<String, Object>> config() {
+        Map<String, Object> config = new java.util.HashMap<>();
         config.put("llmConfigured", appConfig.getLLMApiToken() != null);
         config.put("llmApiUrl", appConfig.getLLMApiUrl());
         config.put("llmModel", appConfig.getLLMApiModel());
         config.put("version", "1.0.0");
         
         return ResponseEntity.ok(config);
+    }
+    
+    /**
+     * GET /api/v1/scraper/jobs/stats
+     * 
+     * Returns statistics about current jobs (for monitoring).
+     */
+    @GetMapping("/jobs/stats")
+    public ResponseEntity<Map<String, Object>> getJobStatistics() {
+        Map<String, Object> stats = jobService.getJobStatistics();
+        return ResponseEntity.ok(stats);
     }
     
     /**
@@ -172,46 +224,6 @@ public class ApiScraperController {
         }
         
         return appConfig.getLLMApiToken();
-    }
-    
-    /**
-     * Generates JSON output from the scraped result.
-     */
-    private String generateJsonOutput(ScrapedResult result) {
-        try {
-            // Create a temporary file path
-            Path tempFile = Files.createTempFile("scraper-output-" + UUID.randomUUID(), ".json");
-            tempFile.toFile().deleteOnExit();
-            
-            // Export to file
-            JsonExporter exporter = new JsonExporter();
-            exporter.export(result, tempFile);
-            
-            // Read back the JSON
-            String json = Files.readString(tempFile);
-            
-            // Clean up
-            Files.deleteIfExists(tempFile);
-            
-            return json;
-            
-        } catch (IOException e) {
-            logger.error("Failed to generate JSON output", e);
-            return "{\"error\": \"Failed to generate JSON output: " + e.getMessage() + "\"}";
-        }
-    }
-    
-    /**
-     * Extracts base URL from a full URL.
-     */
-    private String extractBaseUrl(String url) {
-        try {
-            java.net.URL urlObj = new java.net.URL(url);
-            return String.format("%s://%s", urlObj.getProtocol(), urlObj.getHost());
-        } catch (Exception e) {
-            logger.warn("Could not extract base URL from: {}", url);
-            return null;
-        }
     }
 }
 

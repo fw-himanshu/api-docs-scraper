@@ -3,6 +3,8 @@ package com.freshworks.scraper;
 import org.springframework.boot.SpringApplication;
 import org.springframework.boot.autoconfigure.SpringBootApplication;
 import org.springframework.boot.web.servlet.support.SpringBootServletInitializer;
+import org.springframework.scheduling.annotation.EnableAsync;
+import org.springframework.scheduling.annotation.EnableScheduling;
 
 /**
  * Spring Boot application entry point for the API documentation scraper.
@@ -13,6 +15,8 @@ import org.springframework.boot.web.servlet.support.SpringBootServletInitializer
  * - Integrated LLM-powered intelligent extraction
  */
 @SpringBootApplication
+@EnableAsync
+@EnableScheduling
 public class Application extends SpringBootServletInitializer {
     
     public static void main(String[] args) {
