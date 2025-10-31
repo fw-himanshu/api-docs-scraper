@@ -32,6 +32,12 @@ WORKDIR /app
 # bootJar creates: api-docs-scraper-1.0.0.jar (Spring Boot executable jar)
 COPY --from=builder /app/build/libs/api-docs-scraper-1.0.0.jar /app/app.jar
 
+# Ensure /tmp is writable for Playwright driver extraction
+RUN mkdir -p /tmp && chmod 1777 /tmp
+
+# Create a writable directory for Playwright
+RUN mkdir -p /app/.playwright && chmod 755 /app/.playwright
+
 EXPOSE 8080
 
 # Health info (optional)
