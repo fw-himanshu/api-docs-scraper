@@ -123,41 +123,44 @@ public class ApiScraperController {
     }
     
     /**
-     * Generates a humorous message about the job status using LLM.
+     * Generates a short humorous message about the job status using LLM.
      */
     private String generateHumorousMessage(ScrapeJob job) {
         try {
             long elapsedSeconds = Duration.between(job.getCreatedAt(), LocalDateTime.now()).getSeconds();
             String progressMessage = job.getProgressMessage() != null ? job.getProgressMessage() : "processing";
             
-            String systemPrompt = "You are a witty, friendly assistant. Generate a short, humorous message " +
-                    "(2-3 sentences max) about waiting for an API documentation scraping job to complete. " +
-                    "Make it entertaining but not too silly. Include that the job is still working.";
+            String systemPrompt = "You are a witty assistant. Generate a VERY SHORT humorous message " +
+                    "(ONE sentence, max 15 words) about waiting for an API documentation scraping job. " +
+                    "Make it brief, fun, and reassuring. No emojis unless specifically requested.";
             
             String userPrompt = String.format(
-                    "An API documentation scraping job has been running for %d seconds. " +
-                    "Current status: %s. " +
-                    "The user is checking on the job. " +
-                    "Generate a humorous message to reassure them that the job is still working and will be ready soon. " +
-                    "Be creative and fun, but keep it professional.",
+                    "Job running %d seconds. Status: %s. Generate ONE short, witty sentence " +
+                    "(max 15 words) that the job is still working. Be concise and humorous.",
                     elapsedSeconds,
                     progressMessage
             );
             
             String llmResponse = llmClient.call(systemPrompt, userPrompt);
             // Clean up any markdown formatting from LLM response
-            return llmResponse.trim()
+            String cleaned = llmResponse.trim()
                     .replaceAll("^\"|\"$", "") // Remove quotes
                     .replaceAll("^```[\\w]*\n?|\n?```$", "") // Remove code blocks
                     .trim();
+            
+            // Ensure it's short - truncate if too long
+            if (cleaned.length() > 120) {
+                cleaned = cleaned.substring(0, 117) + "...";
+            }
+            
+            return cleaned;
                     
         } catch (LLMException e) {
             logger.warn("Failed to generate humorous message, using fallback", e);
             // Fallback message if LLM call fails
             long elapsedSeconds = Duration.between(job.getCreatedAt(), LocalDateTime.now()).getSeconds();
             return String.format(
-                    "Your scraping job is still hard at work! 🚀 It's been %d seconds, and our API scraper is " +
-                    "diligently collecting all those endpoints. Great things take time - check back in a moment!",
+                    "Still scraping! %d seconds and counting...",
                     elapsedSeconds
             );
         }
