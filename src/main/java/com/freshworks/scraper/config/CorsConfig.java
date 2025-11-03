@@ -9,23 +9,21 @@ import org.springframework.web.servlet.config.annotation.CorsRegistry;
 import org.springframework.web.servlet.config.annotation.WebMvcConfigurer;
 
 import java.util.Arrays;
-import java.util.List;
 
 /**
  * CORS configuration for the API scraper service.
+ * Allows all origins for development and debugging purposes.
  */
 @Configuration
 public class CorsConfig implements WebMvcConfigurer {
     
-    private static final String ALLOWED_ORIGIN = "https://sip-admin-ui.inboxgrader.com";
-    
     @Override
     public void addCorsMappings(CorsRegistry registry) {
         registry.addMapping("/api/**")
-                .allowedOrigins(ALLOWED_ORIGIN)
+                .allowedOriginPatterns("*") // Allow all origins
                 .allowedMethods("GET", "POST", "PUT", "DELETE", "OPTIONS")
                 .allowedHeaders("*")
-                .allowCredentials(true)
+                .allowCredentials(false) // Must be false when using wildcard origins
                 .maxAge(3600);
     }
     
@@ -35,10 +33,10 @@ public class CorsConfig implements WebMvcConfigurer {
     @Bean
     public CorsConfigurationSource corsConfigurationSource() {
         CorsConfiguration configuration = new CorsConfiguration();
-        configuration.setAllowedOrigins(List.of(ALLOWED_ORIGIN));
+        configuration.setAllowedOriginPatterns(Arrays.asList("*")); // Allow all origins
         configuration.setAllowedMethods(Arrays.asList("GET", "POST", "PUT", "DELETE", "OPTIONS"));
-        configuration.setAllowedHeaders(List.of("*"));
-        configuration.setAllowCredentials(true);
+        configuration.setAllowedHeaders(Arrays.asList("*"));
+        configuration.setAllowCredentials(false); // Must be false when using wildcard origins
         configuration.setMaxAge(3600L);
         
         UrlBasedCorsConfigurationSource source = new UrlBasedCorsConfigurationSource();

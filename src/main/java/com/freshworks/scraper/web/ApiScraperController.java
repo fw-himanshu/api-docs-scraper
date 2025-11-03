@@ -25,6 +25,7 @@ import java.time.LocalDateTime;
 @RestController
 @RequestMapping("/api/v1/scraper")
 @Validated
+@CrossOrigin(origins = "*")
 public class ApiScraperController {
     
     private static final Logger logger = LoggerFactory.getLogger(ApiScraperController.class);
