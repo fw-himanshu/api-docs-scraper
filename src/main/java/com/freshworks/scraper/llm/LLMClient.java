@@ -61,6 +61,7 @@ public class LLMClient {
     
     /**
      * Calls the LLM API with a system prompt and user message.
+     * Uses the default timeout from configuration.
      * 
      * @param systemPrompt The system prompt to set context
      * @param userPrompt The user's question or request
@@ -68,6 +69,19 @@ public class LLMClient {
      * @throws LLMException if the API call fails
      */
     public String call(String systemPrompt, String userPrompt) throws LLMException {
+        return call(systemPrompt, userPrompt, 120); // Default 120 second timeout
+    }
+    
+    /**
+     * Calls the LLM API with a system prompt and user message, with a custom timeout.
+     * 
+     * @param systemPrompt The system prompt to set context
+     * @param userPrompt The user's question or request
+     * @param timeoutSeconds Custom timeout in seconds
+     * @return The LLM's response text
+     * @throws LLMException if the API call fails
+     */
+    public String call(String systemPrompt, String userPrompt, int timeoutSeconds) throws LLMException {
         long startTime = System.currentTimeMillis();
         logger.info("🤖 Calling LLM API");
         logger.info("   📍 URL: {}", apiUrl);
@@ -82,12 +96,11 @@ public class LLMClient {
                     .uri(URI.create(apiUrl))
                     .header("Authorization", "Bearer " + apiToken)
                     .header("Content-Type", "application/json")
-                    .timeout(Duration.ofSeconds(120))
+                    .timeout(Duration.ofSeconds(timeoutSeconds))
                     .POST(HttpRequest.BodyPublishers.ofString(requestBody.toString()))
                     .build();
             
             logger.info("   📤 Sending HTTP request to LLM...");
-            long requestTime = System.currentTimeMillis();
             
             HttpResponse<String> response = httpClient.send(request, HttpResponse.BodyHandlers.ofString());
             

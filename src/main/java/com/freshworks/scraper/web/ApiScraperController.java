@@ -125,6 +125,7 @@ public class ApiScraperController {
     
     /**
      * Generates a short humorous message about the job status using LLM.
+     * Uses a shorter timeout (10 seconds) since this is non-critical.
      */
     private String generateHumorousMessage(ScrapeJob job) {
         try {
@@ -142,7 +143,9 @@ public class ApiScraperController {
                     progressMessage
             );
             
-            String llmResponse = llmClient.call(systemPrompt, userPrompt);
+            // Use shorter timeout (10 seconds) for non-critical humorous messages
+            String llmResponse = llmClient.call(systemPrompt, userPrompt, 10);
+            
             // Clean up any markdown formatting from LLM response
             String cleaned = llmResponse.trim()
                     .replaceAll("^\"|\"$", "") // Remove quotes
@@ -157,8 +160,9 @@ public class ApiScraperController {
             return cleaned;
                     
         } catch (LLMException e) {
-            logger.warn("Failed to generate humorous message, using fallback", e);
-            // Fallback message if LLM call fails
+            // Log at debug level since this is non-critical and failures are expected
+            logger.debug("Failed to generate humorous message (timeout expected), using fallback: {}", e.getMessage());
+            // Fallback message if LLM call fails or times out
             long elapsedSeconds = Duration.between(job.getCreatedAt(), LocalDateTime.now()).getSeconds();
             return String.format(
                     "Still scraping! %d seconds and counting...",

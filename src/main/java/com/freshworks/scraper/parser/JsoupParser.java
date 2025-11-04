@@ -11,7 +11,9 @@ import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
 import java.util.ArrayList;
+import java.util.HashSet;
 import java.util.List;
+import java.util.Set;
 import java.util.regex.Matcher;
 import java.util.regex.Pattern;
 
@@ -36,20 +38,202 @@ public class JsoupParser implements DocumentParser {
         
         Document doc = Jsoup.parse(html);
         List<Endpoint> endpoints = new ArrayList<>();
+        Set<String> processedEndpoints = new HashSet<>();
         
         // Try multiple strategies to find endpoints
-        endpoints.addAll(parseByMethodHeaders(doc));
-        endpoints.addAll(parseByCodeBlocks(doc));
-        endpoints.addAll(parseByTables(doc));
+        endpoints.addAll(parseFromNavigation(doc, processedEndpoints));
+        endpoints.addAll(parseByMethodHeaders(doc, processedEndpoints));
+        endpoints.addAll(parseByHttpRequestSections(doc, processedEndpoints));
+        endpoints.addAll(parseByCodeBlocks(doc, processedEndpoints));
+        endpoints.addAll(parseByTables(doc, processedEndpoints));
         
         logger.info("Extracted {} endpoints from: {}", endpoints.size(), sourceUrl);
         return endpoints;
     }
     
     /**
+     * Extracts endpoints from navigation menus (common in Slate docs).
+     */
+    private List<Endpoint> parseFromNavigation(Document doc, Set<String> processed) {
+        List<Endpoint> endpoints = new ArrayList<>();
+        
+        // Common navigation selectors for Slate and other doc frameworks
+        String[] navSelectors = {
+            "nav a",
+            ".sidebar a",
+            ".toc a",
+            "[role='navigation'] a",
+            ".tocify a",
+            ".slate-nav a",
+            "aside a",
+            ".nav-group a"
+        };
+        
+        for (String selector : navSelectors) {
+            Elements links = doc.select(selector);
+            logger.debug("Found {} navigation links with selector: {}", links.size(), selector);
+            
+            for (Element link : links) {
+                String text = link.text().trim();
+                String href = link.attr("href");
+                
+                // Check if link text contains HTTP method and path
+                Matcher methodMatcher = HTTP_METHOD_PATTERN.matcher(text);
+                Matcher pathMatcher = API_PATH_PATTERN.matcher(text);
+                
+                if (methodMatcher.find() && pathMatcher.find()) {
+                    String method = methodMatcher.group(1).toUpperCase();
+                    String path = pathMatcher.group(1);
+                    
+                    if (path != null && !path.isEmpty()) {
+                        String key = method + " " + path;
+                        if (!processed.contains(key)) {
+                            Endpoint endpoint = new Endpoint(method, path);
+                            endpoint.setSummary(text);
+                            endpoints.add(endpoint);
+                            processed.add(key);
+                            logger.debug("Found endpoint in navigation: {} {}", method, path);
+                        }
+                    }
+                } else {
+                    // Check href for API paths even if text doesn't show method
+                    pathMatcher = API_PATH_PATTERN.matcher(href);
+                    if (pathMatcher.find()) {
+                        String path = pathMatcher.group(1);
+                        // Try to infer method from context or use GET as default
+                        String method = "GET";
+                        Matcher hrefMethodMatcher = HTTP_METHOD_PATTERN.matcher(text.toLowerCase());
+                        if (hrefMethodMatcher.find()) {
+                            method = hrefMethodMatcher.group(1).toUpperCase();
+                        }
+                        
+                        String key = method + " " + path;
+                        if (!processed.contains(key)) {
+                            Endpoint endpoint = new Endpoint(method, path);
+                            endpoint.setSummary(text.isEmpty() ? path : text);
+                            endpoints.add(endpoint);
+                            processed.add(key);
+                            logger.debug("Found endpoint in navigation href: {} {}", method, path);
+                        }
+                    }
+                }
+            }
+        }
+        
+        return endpoints;
+    }
+    
+    /**
+     * Extracts path from href attribute.
+     */
+    private String extractPathFromHref(String href) {
+        if (href == null || href.isEmpty()) {
+            return null;
+        }
+        
+        try {
+            // Remove anchor fragments
+            int anchorIndex = href.indexOf('#');
+            if (anchorIndex >= 0) {
+                href = href.substring(0, anchorIndex);
+            }
+            
+            // Extract path from URL
+            java.net.URL url = new java.net.URL(href.startsWith("http") ? href : "http://example.com" + href);
+            String path = url.getPath();
+            
+            // Check if path looks like an API endpoint
+            if (path.contains("/wp-json/") || path.contains("/api/") || path.contains("/v1/") || 
+                path.contains("/v2/") || path.contains("/v3/")) {
+                return path;
+            }
+            
+            return null;
+        } catch (Exception e) {
+            // Try simple pattern matching
+            Matcher pathMatcher = API_PATH_PATTERN.matcher(href);
+            if (pathMatcher.find()) {
+                return pathMatcher.group(1);
+            }
+            return null;
+        }
+    }
+    
+    /**
+     * Parses "HTTP request" sections common in Slate documentation.
+     */
+    private List<Endpoint> parseByHttpRequestSections(Document doc, Set<String> processed) {
+        List<Endpoint> endpoints = new ArrayList<>();
+        
+        // Look for headings containing "HTTP request" or similar
+        Elements headings = doc.select("h1, h2, h3, h4, h5, h6");
+        
+        for (Element heading : headings) {
+            String headingText = heading.text().toLowerCase();
+            if (headingText.contains("http request") || headingText.contains("request")) {
+                // Look for method and path in the next elements
+                Element current = heading.nextElementSibling();
+                int attempts = 0;
+                
+                while (current != null && attempts < 5) {
+                    String text = current.text();
+                    
+                    Matcher methodMatcher = HTTP_METHOD_PATTERN.matcher(text);
+                    Matcher pathMatcher = API_PATH_PATTERN.matcher(text);
+                    
+                    if (methodMatcher.find() && pathMatcher.find()) {
+                        String method = methodMatcher.group(1).toUpperCase();
+                        String path = pathMatcher.group(1);
+                        String key = method + " " + path;
+                        
+                        if (!processed.contains(key)) {
+                            Endpoint endpoint = new Endpoint(method, path);
+                            endpoint.setSummary(heading.text());
+                            
+                            // Extract description from following content
+                            extractDescriptionAndParams(current, endpoint);
+                            
+                            endpoints.add(endpoint);
+                            processed.add(key);
+                            logger.debug("Found endpoint in HTTP request section: {} {}", method, path);
+                            break; // Found endpoint, move to next heading
+                        }
+                    }
+                    
+                    current = current.nextElementSibling();
+                    attempts++;
+                }
+            }
+        }
+        
+        return endpoints;
+    }
+    
+    private void extractDescriptionAndParams(Element section, Endpoint endpoint) {
+        // Look for description paragraphs
+        Elements paragraphs = section.parent().select("p");
+        if (!paragraphs.isEmpty()) {
+            StringBuilder desc = new StringBuilder();
+            for (Element p : paragraphs) {
+                String text = p.text().trim();
+                if (!text.isEmpty() && !text.matches("^(GET|POST|PUT|DELETE|PATCH|HEAD|OPTIONS).*")) {
+                    if (desc.length() > 0) desc.append(" ");
+                    desc.append(text);
+                }
+            }
+            if (desc.length() > 0) {
+                endpoint.setDescription(desc.toString());
+            }
+        }
+        
+        // Extract parameters from tables
+        extractParameters(section.parent(), endpoint);
+    }
+    
+    /**
      * Looks for headings that contain HTTP methods (e.g., "GET /users")
      */
-    private List<Endpoint> parseByMethodHeaders(Document doc) {
+    private List<Endpoint> parseByMethodHeaders(Document doc, Set<String> processed) {
         List<Endpoint> endpoints = new ArrayList<>();
         
         // Look for headings (h1-h6) that contain HTTP methods
@@ -63,25 +247,29 @@ public class JsoupParser implements DocumentParser {
             if (methodMatcher.find() && pathMatcher.find()) {
                 String method = methodMatcher.group(1).toUpperCase();
                 String path = pathMatcher.group(1);
+                String key = method + " " + path;
                 
-                Endpoint endpoint = new Endpoint(method, path);
-                endpoint.setSummary(text.trim());
-                
-                // Extract description from following content
-                Element nextSibling = heading.nextElementSibling();
-                if (nextSibling != null) {
-                    String desc = extractDescription(nextSibling);
-                    endpoint.setDescription(desc);
+                if (!processed.contains(key)) {
+                    Endpoint endpoint = new Endpoint(method, path);
+                    endpoint.setSummary(text.trim());
                     
-                    // Look for parameters in following sections
-                    extractParameters(heading.parent(), endpoint);
+                    // Extract description from following content
+                    Element nextSibling = heading.nextElementSibling();
+                    if (nextSibling != null) {
+                        String desc = extractDescription(nextSibling);
+                        endpoint.setDescription(desc);
+                        
+                        // Look for parameters in following sections
+                        extractParameters(heading.parent(), endpoint);
+                        
+                        // Look for code examples
+                        extractExamples(heading.parent(), endpoint);
+                    }
                     
-                    // Look for code examples
-                    extractExamples(heading.parent(), endpoint);
+                    endpoints.add(endpoint);
+                    processed.add(key);
+                    logger.debug("Found endpoint: {} {}", method, path);
                 }
-                
-                endpoints.add(endpoint);
-                logger.debug("Found endpoint: {} {}", method, path);
             }
         }
         
@@ -91,10 +279,10 @@ public class JsoupParser implements DocumentParser {
     /**
      * Looks for code blocks that might represent API calls
      */
-    private List<Endpoint> parseByCodeBlocks(Document doc) {
+    private List<Endpoint> parseByCodeBlocks(Document doc, Set<String> processed) {
         List<Endpoint> endpoints = new ArrayList<>();
         
-        Elements codeBlocks = doc.select("pre, code");
+        Elements codeBlocks = doc.select("pre code, pre, code");
         
         for (Element code : codeBlocks) {
             String text = code.text();
@@ -106,12 +294,9 @@ public class JsoupParser implements DocumentParser {
                 if (pathMatcher.find()) {
                     String method = methodMatcher.group(1).toUpperCase();
                     String path = pathMatcher.group(1);
+                    String key = method + " " + path;
                     
-                    // Avoid duplicates
-                    boolean isDuplicate = endpoints.stream()
-                            .anyMatch(e -> e.getMethod().equals(method) && e.getPath().equals(path));
-                    
-                    if (!isDuplicate) {
+                    if (!processed.contains(key)) {
                         Endpoint endpoint = new Endpoint(method, path);
                         
                         // Try to find associated description
@@ -123,7 +308,22 @@ public class JsoupParser implements DocumentParser {
                             }
                         }
                         
+                        // Extract from curl commands or similar
+                        if (text.contains("curl")) {
+                            // Extract path from curl command
+                            Matcher curlPathMatcher = Pattern.compile("curl\\s+[^\\s]+\\s+([^\\s]+)").matcher(text);
+                            if (curlPathMatcher.find()) {
+                                String curlPath = curlPathMatcher.group(1);
+                                if (curlPath.matches("/.*")) {
+                                    path = curlPath;
+                                    endpoint.setPath(path);
+                                    key = method + " " + path;
+                                }
+                            }
+                        }
+                        
                         endpoints.add(endpoint);
+                        processed.add(key);
                         logger.debug("Found endpoint in code block: {} {}", method, path);
                     }
                 }
@@ -136,10 +336,36 @@ public class JsoupParser implements DocumentParser {
     /**
      * Looks for tables that might contain parameter information
      */
-    private List<Endpoint> parseByTables(Document doc) {
-        // This method looks for standalone endpoint tables
-        // Not yet implemented - returns empty list for now
-        return new ArrayList<>();
+    private List<Endpoint> parseByTables(Document doc, Set<String> processed) {
+        List<Endpoint> endpoints = new ArrayList<>();
+        
+        // Look for tables that might list endpoints
+        Elements tables = doc.select("table");
+        
+        for (Element table : tables) {
+            Elements rows = table.select("tr");
+            for (Element row : rows) {
+                String rowText = row.text();
+                Matcher methodMatcher = HTTP_METHOD_PATTERN.matcher(rowText);
+                Matcher pathMatcher = API_PATH_PATTERN.matcher(rowText);
+                
+                if (methodMatcher.find() && pathMatcher.find()) {
+                    String method = methodMatcher.group(1).toUpperCase();
+                    String path = pathMatcher.group(1);
+                    String key = method + " " + path;
+                    
+                    if (!processed.contains(key)) {
+                        Endpoint endpoint = new Endpoint(method, path);
+                        endpoint.setSummary(rowText.trim());
+                        endpoints.add(endpoint);
+                        processed.add(key);
+                        logger.debug("Found endpoint in table: {} {}", method, path);
+                    }
+                }
+            }
+        }
+        
+        return endpoints;
     }
     
     private String extractDescription(Element element) {
