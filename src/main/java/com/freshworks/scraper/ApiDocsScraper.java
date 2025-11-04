@@ -75,6 +75,77 @@ public class ApiDocsScraper {
             List<Endpoint> endpoints = parser.parse(html, url);
             long parseDuration = System.currentTimeMillis() - parseStart;
             
+            // Fallback: If LLMSmartParser found 0 endpoints, try once with Playwright + fallback parser
+            if (endpoints.isEmpty() && parser instanceof LLMSmartParser) {
+                logger.warn("   ⚠️  LLMSmartParser found 0 endpoints");
+                
+                if (!usePlaywright) {
+                    // Fetch with Playwright if not already using it
+                    logger.info("   🔄 Attempting fallback: Fetching with Playwright and using alternative parser");
+                    
+                    try {
+                        // Close current fetcher
+                        fetcher.close();
+                        
+                        // Fetch again with Playwright
+                        PageFetcher playwrightFetcher = FetcherFactory.createFetcher(url, true);
+                        try {
+                            long fallbackFetchStart = System.currentTimeMillis();
+                            String playwrightHtml = playwrightFetcher.fetch(url);
+                            long fallbackFetchDuration = System.currentTimeMillis() - fallbackFetchStart;
+                            logger.info("   ✅ Playwright fetch completed in {} ms ({} chars)", fallbackFetchDuration, playwrightHtml.length());
+                            
+                            // Try with alternative parser (StoplightParser first, then JsoupParser)
+                            DocumentParser fallbackParser = selectFallbackParser(url, playwrightHtml);
+                            logger.info("   🔍 Fallback parser selected: {}", fallbackParser.getClass().getSimpleName());
+                            
+                            long fallbackParseStart = System.currentTimeMillis();
+                            endpoints = fallbackParser.parse(playwrightHtml, url);
+                            long fallbackParseDuration = System.currentTimeMillis() - fallbackParseStart;
+                            
+                            logger.info("   📊 Fallback parser extracted {} endpoints in {} ms", endpoints.size(), fallbackParseDuration);
+                            
+                            if (endpoints.isEmpty()) {
+                                logger.warn("   ⚠️  Fallback parser also found 0 endpoints");
+                            } else {
+                                logger.info("   ✅ Fallback successful! Found {} endpoints", endpoints.size());
+                            }
+                            
+                        } finally {
+                            playwrightFetcher.close();
+                        }
+                        
+                    } catch (Exception e) {
+                        logger.error("   ❌ Fallback attempt failed: {}", e.getMessage(), e);
+                        // Continue with empty endpoints list
+                    }
+                } else {
+                    // Already using Playwright, try alternative parser with existing HTML
+                    logger.info("   🔄 Attempting fallback: Using alternative parser with existing Playwright-fetched HTML");
+                    
+                    try {
+                        DocumentParser fallbackParser = selectFallbackParser(url, html);
+                        logger.info("   🔍 Fallback parser selected: {}", fallbackParser.getClass().getSimpleName());
+                        
+                        long fallbackParseStart = System.currentTimeMillis();
+                        endpoints = fallbackParser.parse(html, url);
+                        long fallbackParseDuration = System.currentTimeMillis() - fallbackParseStart;
+                        
+                        logger.info("   📊 Fallback parser extracted {} endpoints in {} ms", endpoints.size(), fallbackParseDuration);
+                        
+                        if (endpoints.isEmpty()) {
+                            logger.warn("   ⚠️  Fallback parser also found 0 endpoints");
+                        } else {
+                            logger.info("   ✅ Fallback successful! Found {} endpoints", endpoints.size());
+                        }
+                        
+                    } catch (Exception e) {
+                        logger.error("   ❌ Fallback attempt failed: {}", e.getMessage(), e);
+                        // Continue with empty endpoints list
+                    }
+                }
+            }
+            
             // Build result
             ScrapedResult result = new ScrapedResult(url);
             result.setEndpoints(endpoints);
@@ -139,6 +210,26 @@ public class ApiDocsScraper {
         
         // Default to standard Jsoup parser
         logger.info("Using standard JsoupParser");
+        return new JsoupParser();
+    }
+    
+    /**
+     * Selects a fallback parser (without LLM) for retry attempts.
+     * Prioritizes StoplightParser if detected, otherwise uses JsoupParser.
+     */
+    private DocumentParser selectFallbackParser(String url, String html) {
+        // Check if it's a Stoplight-based documentation
+        if (url.contains("stoplight.io") ||
+            html.contains("sl-elements") ||
+            html.contains("stoplight") ||
+            html.contains("HttpOperation")) {
+            
+            logger.info("Detected Stoplight-based documentation for fallback");
+            return new StoplightParser();
+        }
+        
+        // Default to standard Jsoup parser
+        logger.info("Using standard JsoupParser for fallback");
         return new JsoupParser();
     }
     

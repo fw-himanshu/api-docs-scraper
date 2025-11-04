@@ -77,12 +77,20 @@ public class LLMSmartParser implements DocumentParser {
     private List<Endpoint> extractEndpointsInParallel(List<ApiEndpointInfo> discoveredEndpoints, String sourceUrl) {
         List<Endpoint> allEndpoints = new ArrayList<>();
         int totalEndpoints = discoveredEndpoints.size();
+        
+        // Early return if no endpoints to process
+        if (totalEndpoints == 0) {
+            logger.info("   ⚠️  No endpoints to process");
+            return allEndpoints;
+        }
+        
         AtomicInteger successCount = new AtomicInteger(0);
         AtomicInteger failureCount = new AtomicInteger(0);
         AtomicInteger processedCount = new AtomicInteger(0);
         
         // Use ExecutorService with thread pool (max 5 concurrent LLM calls to avoid overwhelming the API)
-        int poolSize = Math.min(5, totalEndpoints);
+        // Ensure minimum pool size of 1 to avoid ThreadPoolExecutor initialization errors
+        int poolSize = Math.max(1, Math.min(5, totalEndpoints));
         ExecutorService executor = Executors.newFixedThreadPool(poolSize);
         
         logger.info("   🚀 Processing {} endpoints in parallel with {} threads", totalEndpoints, poolSize);
