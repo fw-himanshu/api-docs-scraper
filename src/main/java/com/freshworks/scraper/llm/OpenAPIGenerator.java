@@ -65,20 +65,29 @@ public class OpenAPIGenerator {
         
         String systemPrompt = "You are an expert in OpenAPI 3.0 specification. " +
                 "Generate a COMPLETE, valid OpenAPI 3.0 specification in JSON format. " +
+                "You must extract the actual API server/base URL from the documentation source URL and endpoint paths. " +
                 "Return ONLY valid JSON, no markdown, no code blocks.";
         
         String userPrompt = String.format(
                 "Generate a complete OpenAPI 3.0 specification for these %d API endpoints.\n\n" +
-                "Base URL: %s\n\n" +
+                "Documentation Source URL: %s\n" +
+                "Inferred Base URL (use this as fallback): %s\n\n" +
                 "Endpoints:\n%s\n\n" +
+                "IMPORTANT: Extract the actual API server URL from the documentation source URL and endpoint paths. " +
+                "For example:\n" +
+                "- If source is 'https://raw.githubusercontent.com/user/repo/README.md' and endpoints start with '/api', " +
+                "look for the actual API domain in the documentation (e.g., 'https://api.example.com')\n" +
+                "- If endpoints contain full URLs like 'https://api.quotable.io/quotes', extract 'https://api.quotable.io' as the server\n" +
+                "- If documentation mentions a base URL, use that\n" +
+                "- Only use the inferred base URL if no API server URL is found in the documentation\n\n" +
                 "Requirements:\n" +
                 "1. openapi: 3.0.0\n" +
                 "2. info section with title and version\n" +
-                "3. servers section with base URL: %s\n" +
+                "3. servers section with the ACTUAL API server URL extracted from documentation (not the documentation URL)\n" +
                 "4. paths section with all endpoints\n" +
                 "5. components section with schemas\n\n" +
                 "Return ONLY valid JSON.",
-                endpoints.size(), baseUrl, endpointsJson, baseUrl
+                endpoints.size(), source, baseUrl, endpointsJson
         );
         
         logger.info("   🤖 Calling LLM to generate complete OpenAPI spec...");
@@ -152,13 +161,14 @@ public class OpenAPIGenerator {
         
         String userPrompt = String.format(
                 "Generate the paths section for these %d API endpoints (chunk %d).\n\n" +
-                "Base URL: %s\n\n" +
+                "Base URL context: %s\n\n" +
                 "Endpoints:\n%s\n\n" +
                 "Requirements:\n" +
                 "1. Return JSON with ONLY a 'paths' object\n" +
                 "2. Include all endpoints with their methods, summary, description, parameters, and responses\n" +
                 "3. Use proper OpenAPI 3.0 format\n" +
-                "4. Example structure: {\"paths\": {\"/users\": {\"get\": {...}}}\n\n" +
+                "4. Extract full paths from endpoint data (some may contain full URLs)\n" +
+                "5. Example structure: {\"paths\": {\"/users\": {\"get\": {...}}}\n\n" +
                 "Return ONLY valid JSON with the paths object.",
                 endpoints.size(), chunkNum, baseUrl, endpointsJson
         );
@@ -188,9 +198,13 @@ public class OpenAPIGenerator {
     
     /**
      * Merges multiple OpenAPI spec chunks into one complete spec.
+     * Extracts the actual API server URL from endpoint paths if they contain full URLs.
      */
     private String mergeOpenAPISpecs(List<JsonObject> chunkSpecs, String baseUrl, String source) throws LLMException {
         logger.info("   🔗 Starting merge of {} chunk specs", chunkSpecs.size());
+        
+        // Extract API server URL from endpoint paths
+        String apiServerUrl = extractApiServerFromPaths(chunkSpecs, baseUrl, source);
         
         // Create the complete OpenAPI spec structure
         JsonObject merged = new JsonObject();
@@ -203,12 +217,14 @@ public class OpenAPIGenerator {
         info.addProperty("description", "Generated from " + source);
         merged.add("info", info);
         
-        // Add servers section
+        // Add servers section with extracted API server URL
         JsonArray servers = new JsonArray();
         JsonObject server = new JsonObject();
-        server.addProperty("url", baseUrl);
+        server.addProperty("url", apiServerUrl);
         servers.add(server);
         merged.add("servers", servers);
+        
+        logger.info("   🌐 Using API server URL: {}", apiServerUrl);
         
         // Merge all paths from chunks
         JsonObject allPaths = new JsonObject();
@@ -291,6 +307,36 @@ public class OpenAPIGenerator {
         }
         
         return sb.toString();
+    }
+    
+    /**
+     * Extracts the actual API server URL from endpoint paths.
+     * Looks for full URLs in paths and extracts the base URL.
+     */
+    private String extractApiServerFromPaths(List<JsonObject> chunkSpecs, String fallbackBaseUrl, String source) {
+        // Look for full URLs in endpoint paths
+        for (JsonObject chunkSpec : chunkSpecs) {
+            if (chunkSpec.has("paths")) {
+                JsonObject paths = chunkSpec.getAsJsonObject("paths");
+                for (String pathKey : paths.keySet()) {
+                    // Check if path contains a full URL
+                    if (pathKey.startsWith("http://") || pathKey.startsWith("https://")) {
+                        try {
+                            java.net.URL url = new java.net.URL(pathKey);
+                            String extractedBase = String.format("%s://%s", url.getProtocol(), url.getHost());
+                            logger.info("   🔍 Extracted API server URL from path: {} -> {}", pathKey, extractedBase);
+                            return extractedBase;
+                        } catch (Exception e) {
+                            // Continue searching
+                        }
+                    }
+                }
+            }
+        }
+        
+        // If no full URL found, use fallback
+        logger.info("   🔍 No API server URL found in paths, using fallback: {}", fallbackBaseUrl);
+        return fallbackBaseUrl;
     }
     
     /**

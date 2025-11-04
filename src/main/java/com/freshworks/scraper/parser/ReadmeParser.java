@@ -86,21 +86,29 @@ public class ReadmeParser implements DocumentParser {
         String urlContext = determineUrlContext(sourceUrl);
         
         String systemPrompt = "You are an expert at extracting API endpoints from README.md files and other markdown documentation. " +
-                "Your task is to identify ALL API endpoints mentioned in the documentation. " +
-                "You have access to the source URL and should use it to better understand the API structure. " +
+                "Your task is to identify ALL API endpoints mentioned in the documentation AND extract the actual API server/base URL. " +
+                "Look for API server URLs in the documentation (e.g., 'https://api.example.com', 'Base URL: https://api.quotable.io'). " +
                 "Return a JSON array with this structure: [{\"method\": \"GET\", \"path\": \"/users\", \"summary\": \"Get users\", \"description\": \"...\", \"parameters\": [{\"name\": \"id\", \"type\": \"string\", \"required\": true}]}]. " +
+                "If endpoints contain full URLs (e.g., 'https://api.quotable.io/quotes'), extract the base URL and use relative paths. " +
                 "Return ONLY valid JSON, no markdown, no code blocks.";
         
         String userPrompt = String.format(
                 "Extract ALL API endpoints from this markdown documentation.\n\n" +
                 "**Source URL:** %s\n" +
                 "**URL Context:** %s\n\n" +
-                "This URL provides important context about the API structure and base URL. " +
-                "Use it to extract complete and accurate endpoint paths.\n\n" +
+                "IMPORTANT: Extract the ACTUAL API server URL from the documentation content. " +
+                "Look for:\n" +
+                "- API base URLs mentioned in the documentation (e.g., 'Base URL: https://api.quotable.io')\n" +
+                "- Full URLs in endpoint examples (e.g., 'https://api.quotable.io/quotes' -> extract 'https://api.quotable.io')\n" +
+                "- API documentation mentions (e.g., 'API available at https://api.example.com')\n\n" +
+                "For endpoint paths:\n" +
+                "- If documentation shows full URLs like 'https://api.quotable.io/quotes', extract '/quotes' as the path\n" +
+                "- If documentation shows relative paths like '/api/quotes', use that as-is\n" +
+                "- If paths are shown without leading slash, add one\n\n" +
                 "**Markdown Content:**\n%s\n\n" +
                 "Extract ALL API endpoints with their:\n" +
                 "- HTTP method (GET, POST, PUT, DELETE, etc.)\n" +
-                "- Complete path (extract from URL context if relative paths are mentioned)\n" +
+                "- Complete path (relative path, not full URL)\n" +
                 "- Summary/description\n" +
                 "- Parameters (name, type, required, description)\n\n" +
                 "Return a JSON array with ALL endpoints.",
