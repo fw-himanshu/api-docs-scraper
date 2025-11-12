@@ -29,6 +29,9 @@ public class ScrapeJob {
     private String openApiSpec;
     private String jsonOutput;
     private String progressMessage;
+    private Integer judgeScore;
+    private List<String> judgeIssues;
+    private Integer retryCount;
     
     public ScrapeJob() {
     }
@@ -127,6 +130,30 @@ public class ScrapeJob {
     
     public void setProgressMessage(String progressMessage) {
         this.progressMessage = progressMessage;
+    }
+    
+    public Integer getJudgeScore() {
+        return judgeScore;
+    }
+    
+    public void setJudgeScore(Integer judgeScore) {
+        this.judgeScore = judgeScore;
+    }
+    
+    public List<String> getJudgeIssues() {
+        return judgeIssues;
+    }
+    
+    public void setJudgeIssues(List<String> judgeIssues) {
+        this.judgeIssues = judgeIssues;
+    }
+    
+    public Integer getRetryCount() {
+        return retryCount;
+    }
+    
+    public void setRetryCount(Integer retryCount) {
+        this.retryCount = retryCount;
     }
 }
 

@@ -19,16 +19,20 @@ public class OpenAPIGenerator {
     private static final Logger logger = LoggerFactory.getLogger(OpenAPIGenerator.class);
     
     private final LLMClient llmClient;
+    private final LLMJudge judge;
     private final Gson gson;
+    private static final int MAX_RETRIES = 2; // Maximum retry attempts
     
     public OpenAPIGenerator(LLMClient llmClient) {
         this.llmClient = llmClient;
+        this.judge = new LLMJudge(llmClient);
         this.gson = new Gson();
     }
     
     /**
      * Generates OpenAPI 3.0 specification for the scraped result.
      * Splits endpoints into chunks to avoid truncation, then merges the results.
+     * Includes LLM judge evaluation and automatic retry if quality is insufficient.
      * 
      * @param result The scraped result containing endpoints
      * @param baseUrl Base URL for the API (extracted from source URL)
@@ -36,9 +40,25 @@ public class OpenAPIGenerator {
      * @throws LLMException if generation fails
      */
     public String generateOpenAPI(ScrapedResult result, String baseUrl) throws LLMException {
+        return generateOpenAPI(result, baseUrl, 0);
+    }
+    
+    /**
+     * Generates OpenAPI 3.0 specification with retry logic based on judge evaluation.
+     * 
+     * @param result The scraped result containing endpoints
+     * @param baseUrl Base URL for the API (extracted from source URL)
+     * @param retryCount Current retry attempt number
+     * @return OpenAPI 3.0 specification as JSON string
+     * @throws LLMException if generation fails after all retries
+     */
+    public String generateOpenAPI(ScrapedResult result, String baseUrl, int retryCount) throws LLMException {
         logger.info("🤖 Generating OpenAPI 3.0 specification...");
         logger.info("   📊 Endpoints: {}", result.getEndpoints().size());
         logger.info("   🔗 Source: {}", result.getSource());
+        if (retryCount > 0) {
+            logger.info("   🔄 Retry attempt: {}/{}", retryCount, MAX_RETRIES);
+        }
         
         // Determine base URL
         String apiBaseUrl = determineBaseUrl(result.getSource(), baseUrl);
@@ -46,15 +66,46 @@ public class OpenAPIGenerator {
         // Check if we need to split into chunks
         int chunkSize = 8; // Generate specs for 8 endpoints at a time
         
+        String openApiSpec;
         if (result.getEndpoints().size() <= chunkSize) {
             // Small enough to generate in one go
             logger.info("   🔄 Generating complete spec in single request");
-            return generateCompleteOpenAPI(result.getEndpoints(), apiBaseUrl, result.getSource());
+            openApiSpec = generateCompleteOpenAPI(result.getEndpoints(), apiBaseUrl, result.getSource());
         } else {
             // Split into chunks and merge
             logger.info("   🔄 Generating spec in parts ({} endpoints per chunk)", chunkSize);
-            return generateOpenAPIInChunks(result.getEndpoints(), apiBaseUrl, result.getSource(), chunkSize);
+            openApiSpec = generateOpenAPIInChunks(result.getEndpoints(), apiBaseUrl, result.getSource(), chunkSize);
         }
+        
+        // Evaluate quality with LLM judge
+        try {
+            LLMJudge.JudgeResult judgeResult = judge.evaluateOpenAPISpec(
+                openApiSpec, 
+                result.getEndpoints().size(), 
+                result.getSource()
+            );
+            
+            // If judge recommends retry and we haven't exceeded max retries, retry with improved prompts
+            if (judgeResult.shouldRetry() && retryCount < MAX_RETRIES) {
+                logger.warn("   ⚠️  Judge score: {}/100 - Quality insufficient, retrying...", judgeResult.getScore());
+                logger.warn("   📋 Issues: {}", String.join(", ", judgeResult.getIssues()));
+                
+                // Retry with enhanced prompts
+                return generateOpenAPI(result, baseUrl, retryCount + 1);
+            } else if (judgeResult.shouldRetry()) {
+                logger.warn("   ⚠️  Judge score: {}/100 - Quality insufficient but max retries reached", judgeResult.getScore());
+                logger.warn("   📋 Issues: {}", String.join(", ", judgeResult.getIssues()));
+                // Return anyway, but log the issues
+            } else {
+                logger.info("   ✅ Judge score: {}/100 - Quality acceptable", judgeResult.getScore());
+            }
+            
+        } catch (LLMException e) {
+            logger.warn("   ⚠️  Judge evaluation failed, proceeding with generated spec", e);
+            // Continue with generated spec if judge fails
+        }
+        
+        return openApiSpec;
     }
     
     /**

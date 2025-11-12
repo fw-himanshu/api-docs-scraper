@@ -61,6 +61,89 @@ public class JobService {
     }
     
     /**
+     * Retries OpenAPI generation for a completed job.
+     * Only retries if the job is completed and has endpoints.
+     * 
+     * @param jobId The job ID to retry
+     * @param llmToken LLM token for generation
+     * @return The updated job
+     * @throws IllegalArgumentException if job not found or not retryable
+     */
+    public ScrapeJob retryOpenAPIGeneration(String jobId, String llmToken) {
+        ScrapeJob job = jobs.get(jobId);
+        if (job == null) {
+            throw new IllegalArgumentException("Job not found: " + jobId);
+        }
+        
+        if (job.getStatus() != ScrapeJob.Status.COMPLETED) {
+            throw new IllegalArgumentException("Job must be completed to retry OpenAPI generation. Current status: " + job.getStatus());
+        }
+        
+        if (job.getEndpoints() == null || job.getEndpoints().isEmpty()) {
+            throw new IllegalArgumentException("Job has no endpoints to generate OpenAPI spec from");
+        }
+        
+        logger.info("Retrying OpenAPI generation for job {}", jobId);
+        
+        // Update job status
+        job.setStatus(ScrapeJob.Status.PROCESSING);
+        job.setProgressMessage("Retrying OpenAPI generation...");
+        int retryCount = job.getRetryCount() != null ? job.getRetryCount() + 1 : 1;
+        job.setRetryCount(retryCount);
+        
+        // Process retry asynchronously
+        executorService.submit(() -> {
+            try {
+                // Rebuild ScrapedResult from job endpoints
+                ScrapedResult result = new ScrapedResult(job.getSourceUrl());
+                result.setEndpoints(job.getEndpoints());
+                
+                // Generate OpenAPI spec with retry count
+                String baseUrl = extractBaseUrl(job.getSourceUrl());
+                com.freshworks.scraper.llm.OpenAPIGenerator generator = new com.freshworks.scraper.llm.OpenAPIGenerator(
+                    new com.freshworks.scraper.llm.LLMClient(llmToken)
+                );
+                String openApiSpec = generator.generateOpenAPI(result, baseUrl, retryCount);
+                
+                // Evaluate with judge
+                Integer judgeScore = null;
+                List<String> judgeIssues = null;
+                try {
+                    com.freshworks.scraper.llm.LLMClient llmClient = new com.freshworks.scraper.llm.LLMClient(llmToken);
+                    com.freshworks.scraper.llm.LLMJudge judge = new com.freshworks.scraper.llm.LLMJudge(llmClient);
+                    com.freshworks.scraper.llm.LLMJudge.JudgeResult judgeResult = judge.evaluateOpenAPISpec(
+                        openApiSpec, 
+                        job.getEndpoints().size(), 
+                        job.getSourceUrl()
+                    );
+                    
+                    judgeScore = judgeResult.getScore();
+                    judgeIssues = judgeResult.getIssues();
+                } catch (Exception e) {
+                    logger.warn("Judge evaluation failed during retry for job {}", jobId, e);
+                }
+                
+                // Update job with new results
+                job.setOpenApiSpec(openApiSpec);
+                job.setJudgeScore(judgeScore);
+                job.setJudgeIssues(judgeIssues);
+                job.setStatus(ScrapeJob.Status.COMPLETED);
+                job.setProgressMessage(String.format("Retry completed! Judge score: %d/100", judgeScore != null ? judgeScore : 0));
+                
+                logger.info("Retry completed for job {} with judge score: {}/100", jobId, judgeScore);
+                
+            } catch (Exception e) {
+                logger.error("Retry failed for job {}", jobId, e);
+                job.setStatus(ScrapeJob.Status.FAILED);
+                job.setErrorMessage("Retry failed: " + e.getMessage());
+                job.setProgressMessage("Retry failed: " + e.getMessage());
+            }
+        });
+        
+        return job;
+    }
+    
+    /**
      * Processes a scraping job asynchronously.
      */
     private void processJob(String jobId, String sourceUrl, boolean usePlaywright, 
@@ -98,11 +181,38 @@ public class JobService {
             
             // Generate OpenAPI 3.0 specification
             String openApiSpec = null;
+            Integer judgeScore = null;
+            List<String> judgeIssues = null;
+            int currentRetryCount = job.getRetryCount() != null ? job.getRetryCount() : 0;
+            
             try {
-                logger.info("Generating OpenAPI 3.0 specification for job {}", jobId);
+                logger.info("Generating OpenAPI 3.0 specification for job {} (retry count: {})", jobId, currentRetryCount);
                 String baseUrl = extractBaseUrl(sourceUrl);
                 openApiSpec = scraper.generateOpenAPI(result, baseUrl);
                 logger.info("OpenAPI specification generated successfully for job {}", jobId);
+                
+                // Evaluate with LLM judge if LLM is available
+                if (llmToken != null && !llmToken.isEmpty() && openApiSpec != null) {
+                    try {
+                        com.freshworks.scraper.llm.LLMClient llmClient = new com.freshworks.scraper.llm.LLMClient(llmToken);
+                        com.freshworks.scraper.llm.LLMJudge judge = new com.freshworks.scraper.llm.LLMJudge(llmClient);
+                        com.freshworks.scraper.llm.LLMJudge.JudgeResult judgeResult = judge.evaluateOpenAPISpec(
+                            openApiSpec, 
+                            endpoints.size(), 
+                            sourceUrl
+                        );
+                        
+                        judgeScore = judgeResult.getScore();
+                        judgeIssues = judgeResult.getIssues();
+                        job.setJudgeScore(judgeScore);
+                        job.setJudgeIssues(judgeIssues);
+                        
+                        logger.info("Judge evaluation for job {}: Score {}/100, Recommendation: {}", 
+                            jobId, judgeScore, judgeResult.getRecommendation());
+                    } catch (Exception e) {
+                        logger.warn("Judge evaluation failed for job {}", jobId, e);
+                    }
+                }
             } catch (ScraperException e) {
                 logger.error("Failed to generate OpenAPI specification for job {}", jobId, e);
                 // Continue with raw endpoint response
@@ -118,6 +228,7 @@ public class JobService {
             job.setEndpoints(endpoints);
             job.setOpenApiSpec(openApiSpec);
             job.setJsonOutput(jsonOutput);
+            job.setRetryCount(currentRetryCount);
             job.setProgressMessage(String.format("Completed! Extracted %d endpoints", endpoints.size()));
             
             logger.info("Job {} completed successfully with {} endpoints", jobId, endpoints.size());

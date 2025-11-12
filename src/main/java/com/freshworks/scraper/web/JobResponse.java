@@ -57,6 +57,15 @@ public class JobResponse {
         if (job.getJsonOutput() != null) {
             dataMap.put("jsonOutput", job.getJsonOutput());
         }
+        if (job.getJudgeScore() != null) {
+            dataMap.put("judgeScore", job.getJudgeScore());
+        }
+        if (job.getJudgeIssues() != null && !job.getJudgeIssues().isEmpty()) {
+            dataMap.put("judgeIssues", job.getJudgeIssues());
+        }
+        if (job.getRetryCount() != null && job.getRetryCount() > 0) {
+            dataMap.put("retryCount", job.getRetryCount());
+        }
         response.data = dataMap;
         
         return response;

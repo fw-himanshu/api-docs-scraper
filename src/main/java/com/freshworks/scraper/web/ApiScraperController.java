@@ -172,6 +172,61 @@ public class ApiScraperController {
     }
     
     /**
+     * POST /api/v1/scraper/scrape/{jobId}/retry
+     * 
+     * Retries OpenAPI generation for a completed job.
+     * Useful when the judge determines the generated spec quality is insufficient.
+     * 
+     * @param jobId The job ID to retry
+     * @param request Optional request body with LLM token override
+     * @return JobResponse with updated job status
+     */
+    @PostMapping(value = "/scrape/{jobId}/retry", produces = MediaType.APPLICATION_JSON_VALUE)
+    public ResponseEntity<JobResponse> retryOpenAPIGeneration(
+            @PathVariable String jobId,
+            @RequestBody(required = false) Map<String, String> request) {
+        logger.info("Retry request received for job: {}", jobId);
+        
+        try {
+            ScrapeJob job = jobService.getJob(jobId);
+            if (job == null) {
+                return ResponseEntity.status(HttpStatus.NOT_FOUND)
+                        .body(JobResponse.notFound(jobId));
+            }
+            
+            // Determine LLM token (from request, environment, or config)
+            String llmToken = request != null && request.containsKey("llmToken") 
+                ? request.get("llmToken")
+                : determineLlmToken(null);
+            
+            if (llmToken == null || llmToken.isEmpty()) {
+                return ResponseEntity.status(HttpStatus.BAD_REQUEST)
+                        .body(JobResponse.failed(jobId, "LLM token is required for retry"));
+            }
+            
+            // Retry OpenAPI generation
+            jobService.retryOpenAPIGeneration(jobId, llmToken);
+            
+            logger.info("Retry initiated for job {}", jobId);
+            
+            return ResponseEntity.status(HttpStatus.ACCEPTED)
+                    .body(JobResponse.queued(
+                            jobId,
+                            "OpenAPI generation retry initiated. Use /scrape/" + jobId + " to check status."
+                    ));
+            
+        } catch (IllegalArgumentException e) {
+            logger.warn("Invalid retry request for job {}: {}", jobId, e.getMessage());
+            return ResponseEntity.status(HttpStatus.BAD_REQUEST)
+                    .body(JobResponse.failed(jobId, e.getMessage()));
+        } catch (Exception e) {
+            logger.error("Failed to retry OpenAPI generation for job {}", jobId, e);
+            return ResponseEntity.status(HttpStatus.INTERNAL_SERVER_ERROR)
+                    .body(JobResponse.failed(jobId, "Failed to retry: " + e.getMessage()));
+        }
+    }
+    
+    /**
      * GET /api/v1/scraper/health
      * 
      * Health check endpoint.
